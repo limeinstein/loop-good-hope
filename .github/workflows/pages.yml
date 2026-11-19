@@ -1,0 +1,103 @@
+name: 업데이트 주소 게시 (Loop of Good Hope)
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+  schedule:
+    - cron: '11,26,41,56 * * * *'
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  source:
+    runs-on: ubuntu-latest
+    outputs:
+      stable: ${{ steps.refs.outputs.stable }}
+      beta: ${{ steps.refs.outputs.beta }}
+      changed: ${{ steps.refs.outputs.changed }}
+    steps:
+      - id: refs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          stable=$(gh api repos/limeinstein/plus-ultra/git/ref/heads/main --jq .object.sha)
+          beta=$(gh api repos/limeinstein/plus-ultra/git/ref/heads/beta --jq .object.sha)
+          echo "stable=$stable" >> "$GITHUB_OUTPUT"
+          echo "beta=$beta" >> "$GITHUB_OUTPUT"
+          current=$(curl --fail --silent --show-error --max-time 30 "https://limeinstein.github.io/loop-good-hope/source.txt?check=$GITHUB_RUN_ID" || true)
+          if [ "$GITHUB_EVENT_NAME" != 'schedule' ] || [ "$current" != "$stable $beta" ]; then
+            echo 'changed=true' >> "$GITHUB_OUTPUT"
+          else
+            echo 'changed=false' >> "$GITHUB_OUTPUT"
+          fi
+
+  build:
+    needs: source
+    if: needs.source.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - name: 검증할 정식판 커밋 받기
+        uses: actions/checkout@v4
+        with:
+          repository: limeinstein/plus-ultra
+          ref: ${{ needs.source.outputs.stable }}
+          path: stable
+          fetch-depth: 1
+          persist-credentials: false
+      - name: 같은 시점의 베타판 커밋 받기
+        env:
+          BETA_SHA: ${{ needs.source.outputs.beta }}
+        run: |
+          git -C stable fetch --depth=1 origin "$BETA_SHA"
+          git -C stable worktree add --detach "$GITHUB_WORKSPACE/beta" FETCH_HEAD
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+      - run: npm install -g esbuild
+      - name: 두 채널 배포 노트 검사
+        run: |
+          python stable/tools/web_release.py --check
+          python beta/tools/web_release.py --check
+      - name: 정식판 만들기
+        working-directory: stable
+        run: python tools/build_web.py --out "$GITHUB_WORKSPACE/site" --no-zip --image-base "https://raw.githubusercontent.com/limeinstein/plus-ultra/$(git rev-parse HEAD)/images/"
+      - name: 베타판 만들기
+        working-directory: beta
+        run: python tools/build_web.py --channel beta --out "$GITHUB_WORKSPACE/site/beta" --no-zip --image-base "https://raw.githubusercontent.com/limeinstein/plus-ultra/$(git rev-parse HEAD)/images/"
+      - name: 공용 자산과 게시 용량 검사
+        run: |
+          python stable/tools/share_pages_assets.py --site "$GITHUB_WORKSPACE/site"
+          python stable/tools/check_pages_size.py "$GITHUB_WORKSPACE/site"
+      - name: 배포한 원본 커밋 기록
+        env:
+          STABLE_SHA: ${{ needs.source.outputs.stable }}
+          BETA_SHA: ${{ needs.source.outputs.beta }}
+        run: echo "$STABLE_SHA $BETA_SHA" > site/source.txt
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
+        with:
+          timeout: 600000
