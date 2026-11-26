@@ -45,6 +45,12 @@ jobs:
     if: needs.source.outputs.changed == 'true'
     runs-on: ubuntu-latest
     steps:
+      - name: 대용량 원화 빌드 공간 확보
+        run: |
+          set -euo pipefail
+          df -h .
+          sudo rm -rf -- /usr/local/lib/android /usr/share/dotnet /opt/ghc
+          df -h .
       - name: 검증할 정식판 커밋 받기
         uses: actions/checkout@v4
         with:
