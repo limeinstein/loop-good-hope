@@ -61,10 +61,16 @@ jobs:
           persist-credentials: false
       - name: 같은 시점의 베타판 커밋 받기
         env:
+          STABLE_SHA: ${{ needs.source.outputs.stable }}
           BETA_SHA: ${{ needs.source.outputs.beta }}
         run: |
-          git -C stable fetch --depth=1 origin "$BETA_SHA"
-          git -C stable worktree add --detach "$GITHUB_WORKSPACE/beta" FETCH_HEAD
+          set -euo pipefail
+          if [ "$STABLE_SHA" = "$BETA_SHA" ]; then
+            ln -s "$GITHUB_WORKSPACE/stable" "$GITHUB_WORKSPACE/beta"
+          else
+            git -C stable fetch --depth=1 origin "$BETA_SHA"
+            git -C stable worktree add --detach "$GITHUB_WORKSPACE/beta" FETCH_HEAD
+          fi
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
